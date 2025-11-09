@@ -1,0 +1,119 @@
+name: Tests (pytest + testmon)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: "pytest --testmon"
+    # Use GitHub-hosted macOS runner
+    runs-on: macos-latest
+
+    env:
+      PY_VERSION: "3.12"
+      TESTMON_SERVER: "https://ezmon.aloiz.ch"
+      REPO_ID: ${{ github.repository }}
+      JOB_ID: "python-3.12-macos"
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write CI requirements
+        run: |
+          printf "pytest\npytest-testmon\n" > requirements-ci.txt
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+          cache: "pip"
+          cache-dependency-path: "requirements-ci.txt"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-ci.txt
+
+      - name: Download testmon data from server
+        run: |
+          set -euo pipefail
+          echo "📥 Downloading testmon data for ${REPO_ID}/${JOB_ID}..."
+          
+          HTTP_CODE=$(curl -w "%{http_code}" -o .testmondata -f -L \
+            "${TESTMON_SERVER}/api/client/download?repo_id=${REPO_ID}&job_id=${JOB_ID}" \
+            2>/dev/null || echo "000")
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Downloaded existing testmon data"
+            ls -lh .testmondata
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "ℹ️  No existing testmon data found (this is OK for first run)"
+          else
+            echo "⚠️  Failed to download testmon data (HTTP $HTTP_CODE)"
+            echo "   Tests will run without testmon optimization"
+          fi
+      - name: Download priority test list from server
+        run: |
+          set -euo pipefail
+          echo "📥 Downloading priority test list..."
+          
+          HTTP_CODE=$(curl -w "%{http_code}" -o test_preferences.json -f -L \
+            "${TESTMON_SERVER}/api/client/testPreferences?repo_id=${REPO_ID}&job_id=${JOB_ID}" \
+            2>/dev/null || echo "000")
+          
+          if [ "$HTTP_CODE" = "200" ] && [ -s test_preferences.json ]; then
+            echo "✅ Downloaded priority tests:"
+            cat test_preferences.json| python3 -m json.tool
+          else
+            echo "ℹ️  No priority tests available"
+            rm -f test_preferences.json
+          fi    
+
+      - name: Run priority tests first
+        if: hashFiles('test_preferences.json') != ''
+        run: |
+          echo "🚀 Running priority tests first..."
+          TESTS=$(python3 -c "import json; print(' '.join(json.load(open('test_preferences.json'))['always_run_tests']))")
+          if [ -n "$TESTS" ]; then
+            pytest $TESTS -v || true
+          fi
+
+
+      - name: Run tests with testmon
+        run: |
+          pytest --testmon -q
+
+      - name: Upload testmon data to server
+        if: always()
+        run: |
+          set -euo pipefail
+          
+          if [ ! -f .testmondata ]; then
+            echo "⚠️  No .testmondata file found to upload"
+            exit 0
+          fi
+          
+          echo "📤 Uploading testmon data to server..."
+          
+          HTTP_CODE=$(curl -w "%{http_code}" -o /tmp/upload_response.json \
+            -X POST "${TESTMON_SERVER}/api/client/upload" \
+            -F "file=@.testmondata" \
+            -F "repo_id=${REPO_ID}" \
+            -F "job_id=${JOB_ID}" \
+            -F "repo_name=${{ github.repository }}" \
+            2>/dev/null || echo "000")
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Successfully uploaded testmon data"
+            cat /tmp/upload_response.json | python3 -m json.tool 2>/dev/null || cat /tmp/upload_response.json
+          else
+            echo "⚠️  Failed to upload testmon data (HTTP $HTTP_CODE)"
+            cat /tmp/upload_response.json 2>/dev/null || true
+            echo "   This won't affect test results, but next run won't have optimization"
+          fi

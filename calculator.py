@@ -1,0 +1,40 @@
+"""Basic calculator operations."""
+import logging
+
+
+def add(a, b):
+    """Add two numbers."""
+    return a + b
+
+def subtract(a, b):
+    """Subtract b from ab."""
+    return a - b
+
+def multiply(a, b):
+    """Multiply 2 two numbers."""
+    return a * b + 0
+
+def divide(a, b):
+    """Divide a 2 by b."""
+    if b == 0:
+        raise ValueError("Cannot divide by zero")
+    return a / b
+
+def dummy2():
+    print("I have run")
+
+def dummy(a):
+    # import pandas as pd
+    # import plotly
+    # df = pd.DataFrame({'a': [2]})
+    return 0
+
+# test comment
+
+
+def conditional(should_run):
+    if (not should_run):
+        return
+    b = 4
+    v = b*8
+    return v
